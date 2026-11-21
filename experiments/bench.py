@@ -69,15 +69,24 @@ def tone(img):
 def noise(img, s=3):
     return np.clip(img + np.random.default_rng(3).normal(0, s, img.shape), 0, 255).round().astype(np.uint8)
 
+def webp(img, q):
+    ok, buf = cv2.imencode(".webp", img, [cv2.IMWRITE_WEBP_QUALITY, q]); return cv2.imdecode(buf, 1)
+def center_crop(img, f=0.5):
+    h, w = img.shape[:2]; y, x = int(h * (1 - f) / 2), int(w * (1 - f) / 2); return img[y: y + int(h * f), x: x + int(w * f)]
+
 ATTACKS = {
     "none": lambda i: i,
     "jpeg90": lambda i: jpeg(i, 90),
     "jpeg75": lambda i: jpeg(i, 75),
     "jpeg50": lambda i: jpeg(i, 50),
+    "webp80": lambda i: webp(i, 80),
     "resize50": lambda i: resize(i, 0.5),
+    "resize30+jpeg": lambda i: jpeg(resize(i, 0.3), 85),
     "screenshot": lambda i: jpeg(tone(resize(i, 0.7)), 85),   # downscaled, tone-shifted, recompressed
     "crop+jpeg": lambda i: jpeg(crop(i), 85),
     "crop+resize": lambda i: jpeg(resize(crop(i), 0.6), 85),
+    "charcrop": lambda i: jpeg(center_crop(i), 85),          # keep only the middle half (the character)
+    "charcrop+resize+webp": lambda i: webp(resize(center_crop(i), 0.6), 80),
     "noise": lambda i: noise(i),
 }
 
@@ -117,17 +126,23 @@ class BlindWM:
         from blind_watermark import WaterMark
         bw = WaterMark(password_img=1, password_wm=1); bw.read_img(img=img.copy()); bw.read_wm(bits.astype(bool), mode="bit")
         return np.clip(bw.embed(), 0, 255).round().astype(np.uint8)
-    def detect(self, reg, orig, mask):
+    def detect(self, reg, orig, mask, leak=None):
         from blind_watermark import WaterMark
         bw = WaterMark(password_img=1, password_wm=1)
         return (np.asarray(bw.extract(embed_img=reg, wm_shape=NBITS, mode="bit")) > 0.5).astype(int)
+
+class BlindWMRaw(BlindWM):
+    """blind_watermark as shipped: no original available, leak is only stretched back to size."""
+    name = "blind_watermark (no registration)"
+    def detect(self, reg, orig, mask, leak=None):
+        return super().detect(cv2.resize(leak, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_CUBIC), orig, mask)
 
 class InvWM:
     def __init__(self, method): self.method = method; self.name = "invisible-wm/" + method
     def embed(self, img, bits):
         from imwatermark import WatermarkEncoder
         e = WatermarkEncoder(); e.set_watermark("bits", [int(b) for b in bits]); return e.encode(img.copy(), self.method)
-    def detect(self, reg, orig, mask):
+    def detect(self, reg, orig, mask, leak=None):
         from imwatermark import WatermarkDecoder
         return np.asarray(WatermarkDecoder("bits", NBITS).decode(reg, self.method)).astype(int)
 
@@ -141,7 +156,7 @@ class Trust:
         s = "".join(map(str, bits)) + "0" * (self.n - NBITS)
         out = self.tm.encode(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)), s, MODE="binary")
         return cv2.cvtColor(np.array(out.convert("RGB")), cv2.COLOR_RGB2BGR)
-    def detect(self, reg, orig, mask):
+    def detect(self, reg, orig, mask, leak=None):
         s, present, _ = self.tm.decode(Image.fromarray(cv2.cvtColor(reg, cv2.COLOR_BGR2RGB)), MODE="binary")
         if not present or not s: return np.full(NBITS, -1)       # ECC failed: nothing readable
         return np.array([int(c) for c in s[:NBITS]])
@@ -172,7 +187,7 @@ class NonBlind:
             amp += np.minimum(self.adaptive * sd / 8, 4 * self.adaptive)
         d = np.round(pat * amp)
         return np.clip(img.astype(np.float32) + d[..., None], 0, 255).astype(np.uint8)
-    def detect(self, reg, orig, mask):
+    def detect(self, reg, orig, mask, leak=None):
         owner, sign = self._layout(orig.shape)
         d = np.zeros(orig.shape[:2], np.float32)
         for c in range(3):   # undo tone/colour shifts: learn leak = f(original) per channel, then subtract
@@ -184,20 +199,43 @@ class NonBlind:
         score = np.bincount(owner.ravel(), (d * sign).ravel(), NBITS)
         return (score > 0).astype(int)
 
+class NonBlindSmooth(NonBlind):
+    """Same payload layout, but the +-1 cell grid is interpolated into a smooth field
+    and rounded with random dither, so there are no block edges or contour lines."""
+    def __init__(self, amp, grid=48, adaptive=0.0):
+        super().__init__(amp, grid, adaptive); self.name = f"smooth a={amp:g}" + (f"+tex{adaptive:g}" if adaptive else "")
+    def _field(self, shape, bits, key=1234):
+        H, W = shape[:2]; G = self.grid; r = np.random.default_rng(key)
+        owner = r.permutation(G * G) % NBITS; sign = r.choice([-1.0, 1.0], G * G)
+        cells = (sign * (2.0 * bits[owner] - 1)).reshape(G, G).astype(np.float32)
+        return np.clip(cv2.resize(cells, (W, H), interpolation=cv2.INTER_CUBIC), -1, 1)
+    def embed(self, img, bits):
+        f = self._field(img.shape, bits)
+        amp = np.full(img.shape[:2], float(self.amp), np.float32)
+        if self.adaptive:
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            sd = np.sqrt(np.maximum(cv2.blur(g * g, (9, 9)) - cv2.blur(g, (9, 9)) ** 2, 0))
+            amp += np.minimum(self.adaptive * sd / 8, 4 * self.adaptive)
+        v = f * amp
+        d = np.floor(v + np.random.default_rng(99).random(v.shape))      # dithered rounding
+        return np.clip(img.astype(np.float32) + d[..., None], 0, 255).astype(np.uint8)
+
 # ---------------------------------------------------------------- run
 def psnr(a, b):
     m = np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2); return 99.0 if m == 0 else 10 * np.log10(255 ** 2 / m)
 
 def main():
     ims = load_images()
-    algos = [BlindWM(), InvWM("dwtDct"), InvWM("dwtDctSvd"), Trust(),
-             NonBlind(1), NonBlind(2), NonBlind(3), NonBlind(1, adaptive=1.0)]
-    only = sys.argv[1:]
+    algos = [BlindWM(), BlindWMRaw(), InvWM("dwtDct"), InvWM("dwtDctSvd"), Trust(),
+             NonBlind(1), NonBlind(2), NonBlind(3), NonBlind(1, adaptive=1.0),
+             NonBlindSmooth(1), NonBlindSmooth(2), NonBlindSmooth(3), NonBlindSmooth(1, adaptive=1.0)]
+    only = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--no-solid" in sys.argv: ims = {k: v for k, v in ims.items() if not k.startswith("solid") or k == "solid_white"}
     rp = os.path.join(OUT, 'results.json')
     res = json.load(open(rp)) if only and os.path.exists(rp) else {}
-    for k in [k for k in res if any(o in k for o in only)]: del res[k]
+    for k in [k for k in res if any(k.startswith(o) for o in only)]: del res[k]
     for al in algos:
-        if only and not any(o in al.name for o in only): continue
+        if only and not any(al.name.startswith(o) for o in only): continue
         for iname, img in ims.items():
             payloads = [np.random.default_rng(zlib.crc32(iname.encode()) + k).integers(0, 2, NBITS) for k in range(2)]
             for k, bits in enumerate(payloads):
@@ -212,7 +250,7 @@ def main():
                 for an, fn in ATTACKS.items():
                     try:
                         reg, mask = register(fn(wm), img)
-                        got = al.detect(reg, img, mask); acc = float((got == bits).mean())
+                        got = al.detect(reg, img, mask, fn(wm)); acc = float((got == bits).mean())
                     except Exception as e:
                         acc = float("nan")
                     r["acc"][an].append(acc)
