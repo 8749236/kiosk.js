@@ -174,8 +174,12 @@ class NonBlind:
         return np.clip(img.astype(np.float32) + d[..., None], 0, 255).astype(np.uint8)
     def detect(self, reg, orig, mask):
         owner, sign = self._layout(orig.shape)
-        d = (reg.astype(np.float32) - orig.astype(np.float32)).mean(2)
-        d -= cv2.blur(d, (0, 0) if False else (max(orig.shape[1] // 6, 3),) * 2)   # drop tone/brightness drift
+        d = np.zeros(orig.shape[:2], np.float32)
+        for c in range(3):   # undo tone/colour shifts: learn leak = f(original) per channel, then subtract
+            o = orig[..., c].ravel(); l = reg[..., c].ravel().astype(np.float64)
+            n = np.bincount(o[mask.ravel()], minlength=256); t = np.bincount(o[mask.ravel()], l[mask.ravel()], 256)
+            lut = np.where(n > 0, t / np.maximum(n, 1), np.arange(256))
+            d += (reg[..., c] - lut[orig[..., c]]).astype(np.float32) / 3
         d = np.clip(d, -12, 12) * mask                                           # ignore gross mismatches
         score = np.bincount(owner.ravel(), (d * sign).ravel(), NBITS)
         return (score > 0).astype(int)
@@ -189,7 +193,9 @@ def main():
     algos = [BlindWM(), InvWM("dwtDct"), InvWM("dwtDctSvd"), Trust(),
              NonBlind(1), NonBlind(2), NonBlind(3), NonBlind(1, adaptive=1.0)]
     only = sys.argv[1:]
-    res = {}
+    rp = os.path.join(OUT, 'results.json')
+    res = json.load(open(rp)) if only and os.path.exists(rp) else {}
+    for k in [k for k in res if any(o in k for o in only)]: del res[k]
     for al in algos:
         if only and not any(o in al.name for o in only): continue
         for iname, img in ims.items():
