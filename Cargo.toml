@@ -1,0 +1,31 @@
+[package]
+name = "tracemark"
+version = "0.1.0"
+edition = "2021"
+description = "Per-recipient invisible watermark for artwork, read back by comparing against the original"
+license = "MIT"
+
+[lib]
+name = "tracemark"
+
+[[bin]]
+name = "tracemark"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# The library itself has no dependencies so it can be compiled to WASM as-is.
+cli = ["dep:image", "dep:clap"]
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[profile.release]
+opt-level = 3
+
+[profile.dev]
+opt-level = 2
+
+[profile.test]
+opt-level = 2
