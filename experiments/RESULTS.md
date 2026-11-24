@@ -7,6 +7,7 @@
 
 `cargo build --release && python experiments/bench_cli.py`
 
+每格：直接读出的次数 / 配合已发放名单认出的次数（各 2 次），括号内是平均强度。最后一列是拿没加水印的图去测，应为 none。
 
 | 图片 | none | jpeg90 | jpeg75 | jpeg50 | webp80 | resize50 | resize30+jpeg | screenshot | crop+jpeg | crop+resize | charcrop | charcrop+resize+webp | noise | mirror+jpeg | mirror+charcrop+resize | 未加水印的图 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
