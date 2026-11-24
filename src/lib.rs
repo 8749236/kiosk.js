@@ -12,6 +12,8 @@ mod detect;
 mod embed;
 mod pattern;
 mod register;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 
 pub use code::{decode_soft, encode_id, CODE_BITS};
 pub use detect::{detect, Detection, Verdict};

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tracemark · 给每份图一个隐形编号</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1d1c1a; --dim:#6b6860; --line:#dcd9d2; --accent:#2f5d50; --accent-ink:#fff; --good:#1f6f43; --warn:#8a5a00; --bad:#a3322a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161614; --card:#1f1f1c; --ink:#ecebe6; --dim:#a09d94; --line:#35342f; --accent:#7fc0ab; --accent-ink:#10201b; --good:#7fd0a0; --warn:#e0b560; --bad:#f08a80; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui, "PingFang SC", "Hiragino Sans", "Microsoft YaHei", sans-serif; }
+  main { max-width:680px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; letter-spacing:.01em; }
+  .lead { color:var(--dim); margin:0 0 24px; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:20px; }
+  [role=tab] { font:inherit; color:var(--dim); background:none; border:0; border-bottom:2px solid transparent; padding:8px 14px; margin-bottom:-1px; cursor:pointer; }
+  [role=tab][aria-selected=true] { color:var(--ink); border-color:var(--accent); font-weight:600; }
+  section, .shared { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; }
+  .shared { margin-bottom:20px; }
+  label { display:block; font-weight:600; margin:16px 0 6px; }
+  label:first-child { margin-top:0; }
+  .hint { font-weight:400; color:var(--dim); font-size:.875rem; }
+  input[type=text], textarea { width:100%; font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  textarea { min-height:120px; resize:vertical; }
+  .drop { display:block; border:1.5px dashed var(--line); border-radius:8px; padding:18px; text-align:center; color:var(--dim); cursor:pointer; font-weight:400; margin:0; }
+  .drop.over { border-color:var(--accent); color:var(--ink); }
+  .drop input { position:absolute; opacity:0; width:1px; height:1px; }
+  .drop:focus-within { outline:2px solid var(--accent); outline-offset:2px; }
+  .picked { display:block; color:var(--ink); font-size:.875rem; word-break:break-all; }
+  button.go { font:inherit; font-weight:600; background:var(--accent); color:var(--accent-ink); border:0; border-radius:6px; padding:10px 18px; margin-top:20px; cursor:pointer; }
+  button.go:disabled { opacity:.5; cursor:progress; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .status { margin:14px 0 0; white-space:pre-line; min-height:1.6em; }
+  .status.good { color:var(--good); } .status.warn { color:var(--warn); } .status.bad { color:var(--bad); }
+  footer { color:var(--dim); font-size:.875rem; margin-top:24px; }
+  footer li { margin:4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>tracemark</h1>
+  <p class="lead">给每个支援者发一份带隐形编号的图。图流出去之后，拿原图一比就知道是谁那份。图片只在你的浏览器里处理，不会上传。</p>
+
+  <div class="shared">
+    <label for="key">密钥 <span class="hint">自己定一串文字并记住。加编号和查泄露必须用同一个。</span></label>
+    <input id="key" type="text" autocomplete="off" spellcheck="false">
+    <label for="names">支援者名单 <span class="hint">每行一个名字或账号。<span id="count"></span></span></label>
+    <textarea id="names" spellcheck="false" placeholder="小明&#10;alice@example.com&#10;Discord: bob#1234"></textarea>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" aria-controls="embed">加编号</button>
+    <button role="tab" aria-selected="false" aria-controls="detect">查泄露</button>
+  </div>
+
+  <section id="embed" role="tabpanel">
+    <label class="drop"><input id="embed-files" type="file" accept="image/*" multiple>点击选择或拖入要发的图（可多张）<span class="picked"></span></label>
+    <button id="embed-go" class="go">生成每人一份</button>
+    <p id="embed-status" class="status" role="status"></p>
+  </section>
+
+  <section id="detect" role="tabpanel" hidden>
+    <label>你的原图 <span class="hint">没加编号的那张</span></label>
+    <label class="drop"><input id="detect-original" type="file" accept="image/*">点击选择或拖入原图<span class="picked"></span></label>
+    <label>可疑的图 <span class="hint">在别处发现的那张，截图、裁剪过的都可以</span></label>
+    <label class="drop"><input id="detect-suspect" type="file" accept="image/*">点击选择或拖入可疑的图<span class="picked"></span></label>
+    <button id="detect-go" class="go">查是谁的</button>
+    <p id="detect-status" class="status" role="status"></p>
+  </section>
+
+  <footer>
+    <ul>
+      <li>密钥和名单只保存在这台设备的浏览器里。请自己另存一份：丢了密钥就查不出来了。</li>
+      <li>同一个密钥下，同一个名字永远对应同一个编号。</li>
+      <li>扛得住转格式、压缩、缩放、裁剪、镜像和局部遮挡；扛不住明显旋转、多人对比抹除和 AI 重绘。</li>
+    </ul>
+  </footer>
+</main>
+<script src="app.js" type="module"></script>
+</body>
+</html>

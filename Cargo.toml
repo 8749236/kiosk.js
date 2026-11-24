@@ -7,6 +7,7 @@ license = "MIT"
 
 [lib]
 name = "tracemark"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "tracemark"
